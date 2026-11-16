@@ -1,6 +1,6 @@
 name: Build iOS IPA
 
-# Run make gen on your own dump. Public hosted builds use an age-encrypted release asset.
+# Public hosted builds translate exefs from an age-encrypted release asset.
 on:
   push:
     branches: [ build ]
@@ -26,12 +26,12 @@ jobs:
     name: Build MHGURecomp for iOS / iPadOS
     if: github.event_name == 'workflow_dispatch' || github.event.repository.private
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Stage translated game code
+      - name: Prepare game code
         env:
           GH_TOKEN: ${{ github.token }}
           GENERATED_TAG: ${{ inputs.generated_tag }}
@@ -44,27 +44,61 @@ jobs:
           fi
 
           umask 077
-          INPUT_DIR=$(mktemp -d "$RUNNER_TEMP/mhgu-inputs.XXXXXX")
+          # make gen expects GAME and PY relative to the repository root.
+          INPUT_DIR=$(mktemp -d .mhgu-inputs.XXXXXX)
           trap 'rm -rf "$INPUT_DIR"' EXIT
-          ASSET=mhgu-generated.zip
-          if [ "$PRIVATE_REPO" != true ]; then
-            if [ -z "$MHGU_BUILD_KEY" ]; then
-              echo 'Add MHGU_BUILD_KEY as an Actions secret to decrypt the build input.' >&2
-              exit 1
-            fi
-            GENERATED_TAG=${GENERATED_TAG:-ios-build-inputs}
-            ASSET=mhgu-generated.zip.age
-            command -v age >/dev/null || brew install age
-            printf '%s\n' "$MHGU_BUILD_KEY" > "$INPUT_DIR/identity.txt"
-            unset MHGU_BUILD_KEY
-            age-keygen -y "$INPUT_DIR/identity.txt" > "$RUNNER_TEMP/mhgu-ipa-recipient.txt"
+          if [ "$PRIVATE_REPO" = true ]; then
+            gh release download --repo "$GITHUB_REPOSITORY" --pattern mhgu-generated.zip \
+              --dir "$INPUT_DIR" -- "$GENERATED_TAG"
+            python3 tools/stage_ios_generated.py "$INPUT_DIR/mhgu-generated.zip"
+            exit
           fi
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" \
-            --dir "$INPUT_DIR" -- "$GENERATED_TAG"
-          if [ "$ASSET" = mhgu-generated.zip.age ]; then
-            age --decrypt --identity "$INPUT_DIR/identity.txt" --output "$INPUT_DIR/mhgu-generated.zip" "$INPUT_DIR/$ASSET"
+
+          if [ -z "$MHGU_BUILD_KEY" ]; then
+            echo 'Add MHGU_BUILD_KEY as an Actions secret to decrypt the build input.' >&2
+            exit 1
+          fi
+          printf '%s\n' "$MHGU_BUILD_KEY" > "$INPUT_DIR/identity.txt"
+          unset MHGU_BUILD_KEY
+          command -v age >/dev/null || brew install age
+          age-keygen -y "$INPUT_DIR/identity.txt" > "$RUNNER_TEMP/mhgu-ipa-recipient.txt"
+          gh release download --repo "$GITHUB_REPOSITORY" \
+            --pattern mhgu-exefs.zip.age --pattern mhgu-generated.zip.age \
+            --dir "$INPUT_DIR" -- "${GENERATED_TAG:-ios-build-inputs}"
+
+          if [ -f "$INPUT_DIR/mhgu-exefs.zip.age" ]; then
+            age --decrypt --identity "$INPUT_DIR/identity.txt" \
+              --output "$INPUT_DIR/mhgu-exefs.zip" "$INPUT_DIR/mhgu-exefs.zip.age"
             rm "$INPUT_DIR/identity.txt"
+            python3 - "$INPUT_DIR/mhgu-exefs.zip" "$INPUT_DIR/exefs" <<'PY'
+          from pathlib import Path
+          import shutil
+          import stat
+          import sys
+          import zipfile
+
+          archive, destination = map(Path, sys.argv[1:])
+          with zipfile.ZipFile(archive) as bundle:
+              entries = bundle.infolist()
+              if sorted(entry.filename for entry in entries) != ["main", "sdk"]:
+                  sys.exit("mhgu-exefs.zip must contain main and sdk at the archive root.")
+              if any(entry.file_size == 0 or stat.S_ISLNK(entry.external_attr >> 16) for entry in entries):
+                  sys.exit("main and sdk must be nonempty regular files.")
+              destination.mkdir()
+              for entry in entries:
+                  with bundle.open(entry) as source, (destination / entry.filename).open("xb") as target:
+                      shutil.copyfileobj(source, target)
+          PY
+            python3 -m venv "$INPUT_DIR/venv"
+            "$INPUT_DIR/venv/bin/python" -m pip install -q -r tools/requirements.txt
+            make gen GAME="$INPUT_DIR" PY="$INPUT_DIR/venv/bin/python"
+            python3 tools/stage_ios_generated.py
+            exit
           fi
+
+          age --decrypt --identity "$INPUT_DIR/identity.txt" \
+            --output "$INPUT_DIR/mhgu-generated.zip" "$INPUT_DIR/mhgu-generated.zip.age"
+          rm "$INPUT_DIR/identity.txt"
           python3 tools/stage_ios_generated.py "$INPUT_DIR/mhgu-generated.zip"
 
       # Each group of libraries has a cache of its own, saved as soon as it is built: a later failure doesn't build it again.
