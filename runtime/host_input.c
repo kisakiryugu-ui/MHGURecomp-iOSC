@@ -38,6 +38,9 @@
 #include "keymap.h"
 #include "mods.h"
 #include "overlay.h"
+#ifdef __APPLE__
+#include "touch_overlay.h"
+#endif
 #include "settings_panel.h"
 #include "rt.h"
 #include "textinput.h"
@@ -1263,6 +1266,9 @@ void host_input_update(void) {
     if (textinput_active() != typing) {
         typing = !typing;
         memset(keys, 0, sizeof keys);  // (keys held when the entry opened are typing now, or released)
+#ifdef __APPLE__
+        mhgu_touch_cancel_inputs();
+#endif
     }
 
     for (int i = 0; i < BINDS; i++)
@@ -1380,7 +1386,27 @@ void host_input_update(void) {
         menu = !menu;
         memset(keys, 0, sizeof keys);  // (keys held as it opened went to the menu: nothing stays pressed)
         mouse_held = 0;
+#ifdef __APPLE__
+        mhgu_touch_cancel_inputs();
+#endif
     }
+    uint64_t touch_prompt_down = 0;
+#ifdef __APPLE__
+    // Merge touch after the physical controller's host-menu chord.
+    uint64_t touch_buttons;
+    int touch_lx, touch_ly, touch_rx, touch_ry;
+    mhgu_touch_snapshot(&touch_buttons, &touch_lx, &touch_ly, &touch_rx, &touch_ry);
+    static uint64_t touch_prompt_held;
+    if (typing && !chat_active()) {
+        uint64_t held = menu ? 0 : touch_buttons & (B(BTN_PLUS) | B(BTN_B));
+        touch_prompt_down = held & ~touch_prompt_held;
+        touch_prompt_held = held;
+    } else {
+        touch_prompt_held = 0;
+        b |= touch_buttons;
+        lx += touch_lx; ly += touch_ly; rx += touch_rx; ry += touch_ry;
+    }
+#endif
     if (menu) {  // Forge's menu has the controller (as in Forge: A activates, B cancels, stick and d-pad move)
         OverlayPad p = {b & B(BTN_A), b & B(BTN_B), b & B(BTN_X), b & B(BTN_Y), b & B(BTN_UP), b & B(BTN_DOWN),
                         b & B(BTN_LEFT), b & B(BTN_RIGHT), b & B(BTN_L), b & B(BTN_R), b & B(BTN_PLUS),
@@ -1414,8 +1440,8 @@ void host_input_update(void) {
             int a_pos = overlay_face_position(0), b_pos = overlay_face_position(1);
             if (menu_confirm_position(menu_confirm_policy_now(), a_pos, b_pos, 1) == a_pos) cancel = BTN_A;
         }
-        if (down & B(BTN_PLUS)) textinput_key(TI_ENTER);
-        else if (down & B(cancel)) textinput_key(TI_CANCEL);
+        if ((down | touch_prompt_down) & B(BTN_PLUS)) textinput_key(TI_ENTER);
+        else if ((down & B(cancel)) || (touch_prompt_down & B(BTN_B))) textinput_key(TI_CANCEL);
         b &= ~(B(BTN_PLUS) | B(cancel));
     }
     act_update(b, script_b, menu || (typing && !chat_active()));

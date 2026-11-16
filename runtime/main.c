@@ -21,6 +21,7 @@
 #include <SDL3/SDL_main.h>  // (main becomes SDL_main, which SDL's Java activity calls in libmain.so; iOS: its UIKit app)
 #endif
 #ifdef __APPLE__
+#include "touch_overlay.h"
 #include <unistd.h>
 void plat_show_missing_files_screen(const char *main_path, const char *doc_path);  // (runtime/platform/darwin.c)
 #endif
@@ -99,6 +100,9 @@ static void boot(const char *root) {
     quickhunt_init();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
     camjit_init();  // (FSR: the main camera and its jitter: runtime/hle/camera_jitter.c)
     mousecam_init();  // (mouse look on the hunt camera's angles: runtime/hle/mousecam.c)
+#ifdef __APPLE__
+    mhgu_touch_runtime_init();
+#endif
     itembar_init();  // (the mouse wheel on the item bar: runtime/hle/itembar.c)
     { void menuptr_init(void); menuptr_init(); }  // (the mouse in the pause menu: runtime/hle/menuptr.c)
     { void prompts_init(void); prompts_init(); }  // (keyboard and mouse button prompts: runtime/hle/prompts.c)
@@ -307,6 +311,9 @@ int main(int argc, char **argv) {
 #endif
         backend_loading_screen();
     }
+#ifdef __APPLE__
+    if (!getenv("MHGU_HIDDEN")) mhgu_touch_install(ui_window());
+#endif
     boot(g_game_dir);
     return ui_run();
 }

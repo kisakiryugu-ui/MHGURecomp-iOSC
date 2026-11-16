@@ -281,6 +281,7 @@ jobs:
           cp ios/Icon.png "$APP_DIR/Icon.png"
           cp ios/Icon.png "$APP_DIR/AppIcon60x60@2x.png"
           cp ios/Icon.png "$APP_DIR/AppIcon76x76@2x~ipad.png"
+          cp -R ios/Fonts "$APP_DIR/Fonts"
           cp extras/pipelines.list "$APP_DIR/pipelines.list"
 
           # Strip debug symbols to optimize size

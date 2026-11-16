@@ -10,6 +10,9 @@
 #include "input.h"
 #include "../net/discord.h"
 #include "../net/net.h"
+#ifdef __APPLE__
+#include "../touch_overlay.h"
+#endif
 
 static volatile uint64_t g_buttons;
 static volatile int32_t g_sticks[4];  // lx, ly, rx, ry (-32767..32767, y up)
@@ -97,6 +100,9 @@ static void fill_state(Cpu *c) {
     memcpy(s + 28, &ry, 4);
     uint32_t attr = 1;  // IsConnected
     memcpy(s + 32, &attr, 4);
+#ifdef __APPLE__
+    mhgu_touch_combo_sampled(b);
+#endif
 }
 HLE_FUNC("_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj", hid_state_fullkey) { fill_state(c); }
 HLE_FUNC("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj", hid_state_dual) { fill_state(c); }

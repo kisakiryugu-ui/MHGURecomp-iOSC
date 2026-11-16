@@ -1,10 +1,18 @@
 name: Build iOS IPA
 
-# Needs generated/ from your own dump (make gen): none is in this repository.
+# Run make gen on your own dump. Hosted builds can stage that output from a private release.
 on:
   push:
     branches: [ build ]
   workflow_dispatch:
+    inputs:
+      generated_tag:
+        description: 'Private release tag containing mhgu-generated.zip'
+        required: false
+        type: string
+
+permissions:
+  contents: read
 
 env:
   MOLTENVK_VER: v1.3.0
@@ -21,6 +29,26 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Stage translated game code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GENERATED_TAG: ${{ inputs.generated_tag }}
+          PRIVATE_REPO: ${{ github.event.repository.private }}
+        run: |
+          if [ -z "$GENERATED_TAG" ]; then
+            python3 tools/stage_ios_generated.py
+          else
+            if [ "$PRIVATE_REPO" != true ]; then
+              echo 'Use a private repository for the translated game code asset.' >&2
+              exit 1
+            fi
+            INPUT_DIR=$(mktemp -d "$RUNNER_TEMP/mhgu-inputs.XXXXXX")
+            trap 'rm -rf "$INPUT_DIR"' EXIT
+            gh release download --repo "$GITHUB_REPOSITORY" --pattern mhgu-generated.zip \
+              --dir "$INPUT_DIR" -- "$GENERATED_TAG"
+            python3 tools/stage_ios_generated.py "$INPUT_DIR/mhgu-generated.zip"
+          fi
 
       # Each group of libraries has a cache of its own, saved as soon as it is built: a later failure doesn't build it again.
       - name: Restore MoltenVK, SDL3, shaderc
@@ -143,7 +171,7 @@ jobs:
         run: |
           [ -d obj/gen ] && find obj/gen -name '*.o' -exec touch {} +
           NCPU=$(sysctl -n hw.ncpu)
-          make -j$NCPU DEPS=deps VERSION="$(git log -1 --format=%s | sed -n 's/^Build //p')-ios"
+          make -j$NCPU DEPS=deps VERSION=0.17.5.1-touch-ios
           file build/MHGURecomp
 
       - name: Save game code objects
@@ -167,6 +195,7 @@ jobs:
           cp ios/Icon.png "$APP_DIR/Icon.png"
           cp ios/Icon.png "$APP_DIR/AppIcon60x60@2x.png"
           cp ios/Icon.png "$APP_DIR/AppIcon76x76@2x~ipad.png"
+          cp -R ios/Fonts "$APP_DIR/Fonts"
           cp extras/pipelines.list "$APP_DIR/pipelines.list"
 
           # Strip debug symbols to optimize size

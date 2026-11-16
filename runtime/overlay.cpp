@@ -172,6 +172,9 @@ void overlay_toggle_settings(void) {
     g_settings_open = true;
     set_open(g_forge_open);
 }
+void overlay_toggle_forge(void) {
+    if (g_enabled) set_open(!g_forge_open);
+}
 void overlay_menu_chord(void) {
     if (!g_enabled) return;
     if (g_forge_open && !g_settings_open) { set_open(false); return; }  // (Forge's menu alone: closed)
@@ -190,7 +193,7 @@ bool overlay_event(const SDL_Event *e) {
         return true;
     }
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && (int)e->key.scancode == g_menu_key) {
-        set_open(!g_forge_open);
+        overlay_toggle_forge();
         return true;
     }
     if (!g_open) return false;

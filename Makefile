@@ -155,6 +155,7 @@ include android/android.mk
 else ifeq ($(PLATFORM),darwin)
 # iOS / iPadOS: SDL3, shaderc, FFmpeg and MoltenVK prebuilt for it in $(DEPS) (.github/workflows/build-ios.yml). An app
 # can't load a library of its own, so the game code is linked into the executable (STATIC_GAMELIB).
+RT_SRC   += runtime/platform/ios_touch.c
 DEPS     ?= deps
 SDKROOT  ?= $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 ARCH_FLAGS ?= -target arm64-apple-ios15.0 -isysroot $(SDKROOT)
@@ -170,7 +171,7 @@ FRAMEWORKS := -framework UIKit -framework Metal -framework QuartzCore -framework
               -framework GameController -framework CoreHaptics -framework IOKit \
               -framework IOSurface -framework CoreVideo -framework CoreMedia \
               -framework AVFoundation -framework CoreBluetooth -framework CoreMotion \
-              -framework OpenGLES -framework UniformTypeIdentifiers
+              -framework OpenGLES -framework UniformTypeIdentifiers -framework CoreText
 LDFLAGS  := $(ARCH_FLAGS) -L$(DEPS)/lib -lSDL3 $(AV_LIBS) -lMoltenVK -lshaderc_combined $(ZSTD_LIBS) -lz $(FRAMEWORKS) -lc++
 GAMELIB  := $(B)/mhgugame.dylib
 GAMELIB_LDFLAGS := -shared $(ARCH_FLAGS)
@@ -224,6 +225,9 @@ VERSION ?= $(shell git describe --tags 2>/dev/null || echo unknown)
 
 RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(RYUSRV_OBJ) $(RT_CXX) $(O)/rt/overlay.o $(O)/rt/settings_panel.o $(O)/rt/binding_view.o $(IMGUI_OBJ) \
            $(O)/updater/sha256.o $(ICON_RES) $(ENET_OBJ)
+ifeq ($(PLATFORM),darwin)
+RT_OBJ += $(O)/rt/touch_overlay.o
+endif
 # The Ryujinx LDN server this game can run itself (runtime/net/ryusrv/: C++)
 RYUSRV_OBJ := $(patsubst runtime/net/ryusrv/%.cpp,$(O)/rt/net/ryusrv/%.o,$(wildcard runtime/net/ryusrv/*.cpp))
 $(O)/rt/net/ryusrv/%.o: runtime/net/ryusrv/%.cpp $(wildcard runtime/net/ryusrv/*.h) runtime/net/ryusrv.h
@@ -371,6 +375,10 @@ $(O)/rt/%.o: runtime/%.c $(RT_HDRS)
 	$(CC) $(RTFLAGS) -c $< -o $@
 
 $(O)/rt/platform/darwin.o: RTFLAGS += -x objective-c
+
+$(O)/rt/touch_overlay.o: runtime/touch_overlay.m $(RT_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(RTFLAGS) -x objective-c -c $< -o $@
 
 $(O)/rt/forge_imgui.o: runtime/forge_imgui_thunks.inc $(IMGUI)/cimgui.h
 $(O)/rt/forge_imgui.o: RTFLAGS += -DCIMGUI_NO_EXPORT -Wno-unused-variable
