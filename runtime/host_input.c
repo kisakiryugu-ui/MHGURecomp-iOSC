@@ -1390,7 +1390,7 @@ void host_input_update(void) {
         mhgu_touch_cancel_inputs();
 #endif
     }
-    uint64_t touch_prompt_down = 0;
+    uint64_t touch_prompt_down = 0, touch_action_buttons = 0;
 #ifdef __APPLE__
     // Merge touch after the physical controller's host-menu chord.
     uint64_t touch_buttons;
@@ -1403,6 +1403,7 @@ void host_input_update(void) {
         touch_prompt_held = held;
     } else {
         touch_prompt_held = 0;
+        touch_action_buttons = touch_buttons;
         b |= touch_buttons;
         lx += touch_lx; ly += touch_ly; rx += touch_rx; ry += touch_ry;
     }
@@ -1444,6 +1445,8 @@ void host_input_update(void) {
         else if ((down & B(cancel)) || (touch_prompt_down & B(BTN_B))) textinput_key(TI_CANCEL);
         b &= ~(B(BTN_PLUS) | B(cancel));
     }
-    act_update(b, script_b, menu || (typing && !chat_active()));
+    // Touch buttons have no SDL key or pad source. Submit them as literal Switch buttons to Actions,
+    // after applying the same menu and text-entry suppression as the raw pad word.
+    act_update(b, script_b | (touch_action_buttons & b), menu || (typing && !chat_active()));
     input_set(b, clamp_axis(lx), clamp_axis(ly), clamp_axis(rx), clamp_axis(ry));
 }

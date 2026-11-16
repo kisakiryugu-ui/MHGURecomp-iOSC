@@ -229,7 +229,11 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
         si.signalSemaphoreCount = signal ? 1 : 0;
         si.pSignalSemaphores = &signal;
     }
+#ifdef __APPLE__
+    VK_CHECK(vk_ios_submit(&si, fence));
+#else
     VK_CHECK(vkQueueSubmit(g_vk.queue, 1, &si, fence));
+#endif
     if (g_vk.fences) {
         pthread_mutex_lock(&fence_lock);
         fence_last = submit_seq + 1;

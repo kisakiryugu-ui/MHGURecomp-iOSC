@@ -63,6 +63,52 @@ void vk_lock(void) {
 
 void vk_unlock(void) { pthread_mutex_unlock(&g_vk_mutex); }
 
+#ifdef __APPLE__
+// Serialize the two queue entry points with iOS deactivation. Keep this lock
+// independent of command recording and of the swapchain's drawable acquire.
+static pthread_mutex_t ios_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ios_queue_resume = PTHREAD_COND_INITIALIZER;
+static bool ios_queue_active = true, ios_queue_exiting;
+static VkQueue ios_last_queue;
+
+void backend_ios_set_active(bool active) {
+    pthread_mutex_lock(&ios_queue_lock);
+    if (!ios_queue_exiting && ios_queue_active != active) {
+        ios_queue_active = active;
+        if (active) {
+            pthread_cond_broadcast(&ios_queue_resume);
+        } else if (ios_last_queue) {
+            // UIKit is still deactivating the app. Let submitted Metal work
+            // finish before this callback returns and iOS suspends GPU access.
+            VkResult result = vkQueueWaitIdle(ios_last_queue);
+            if (result != VK_SUCCESS) LOG("[vk] iOS background queue drain: %d\n", result);
+        }
+    }
+    pthread_mutex_unlock(&ios_queue_lock);
+}
+
+// The caller already holds vk_lock. Preserve pending Vulkan commands while
+// inactive rather than dropping work that the guest will later wait for.
+static void ios_queue_enter(void) {
+    pthread_mutex_lock(&ios_queue_lock);
+    while (!ios_queue_active && !ios_queue_exiting)
+        pthread_cond_wait(&ios_queue_resume, &ios_queue_lock);
+    if (ios_queue_exiting) {
+        pthread_mutex_unlock(&ios_queue_lock);
+        vk_unlock();
+        for (;;) sleep(3600);
+    }
+    ios_last_queue = g_vk.queue;
+}
+
+VkResult vk_ios_submit(const VkSubmitInfo *submit, VkFence fence) {
+    ios_queue_enter();
+    VkResult result = vkQueueSubmit(g_vk.queue, 1, submit, fence);
+    pthread_mutex_unlock(&ios_queue_lock);
+    return result;
+}
+#endif
+
 // ================================================================== instance / device
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlagsEXT type,
                                                const VkDebugUtilsMessengerCallbackDataEXT *d, void *user) {
@@ -697,7 +743,13 @@ static void create_swapchain(void) {
 
 static void recreate_swapchain(void) {
     vk_wait_seq(vk_pending_seq() - 1);
+#ifdef __APPLE__
+    ios_queue_enter();
+#endif
     vkDeviceWaitIdle(g_vk.dev);
+#ifdef __APPLE__
+    pthread_mutex_unlock(&ios_queue_lock);
+#endif
     create_swapchain();
 }
 
@@ -893,7 +945,13 @@ static void frame_end(const char *shot_path) {
     vk_submit_extra(cur_frame.acquired, done_sem[img]);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
+#ifdef __APPLE__
+    ios_queue_enter();
+#endif
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
+#ifdef __APPLE__
+    pthread_mutex_unlock(&ios_queue_lock);
+#endif
     // (Android says SUBOPTIMAL whenever the system turns the image: a new swapchain would be no better. A new
     // window size is caught in frame_begin.)
 #ifdef __ANDROID__
@@ -1031,11 +1089,19 @@ static SDL_AtomicInt vk_up;  // backend_init has finished (the loading screen wa
 static void exit_handler(void) {
     exiting = true;
     vk_exit_thread = pthread_self();
+    bool gpu_available = true;
+#ifdef __APPLE__
+    pthread_mutex_lock(&ios_queue_lock);
+    gpu_available = ios_queue_active;
+    ios_queue_exiting = true;
+    pthread_cond_broadcast(&ios_queue_resume);
+    pthread_mutex_unlock(&ios_queue_lock);
+#endif
     if (g_vk.dev && g_vk_owner != pthread_self()) {  // (inside a submission already: the holder is us, don't self-lock)
         pthread_mutex_lock(&g_vk_mutex);
         pthread_mutex_unlock(&g_vk_mutex);
     }
-    if (g_vk.dev) {
+    if (g_vk.dev && gpu_available) {
         vkDeviceWaitIdle(g_vk.dev);
         pipeline_cache_save();
     }
